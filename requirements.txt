@@ -1,0 +1,7 @@
+transformers>=4.46.0
+sentence-transformers>=3.2.2
+optimum[onnxruntime]>=1.17.0
+onnxruntime>=1.18.0
+accelerate>=0.30.0
+tqdm
+numpy>=1.26
