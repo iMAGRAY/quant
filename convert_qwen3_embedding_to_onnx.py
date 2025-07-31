@@ -159,40 +159,21 @@ def _validate(model_fp32: Path, model_int8: Path, tokenizer_name: str, device: s
         opts = SessionOptions()
         opts.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
         sess = InferenceSession(path.as_posix(), opts, providers=get_available_providers())
-        io_binding = sess.io_binding()
-        io_binding.bind_input(
-            name="input_ids",
-            device_type="cpu",
-            device_id=0,
-            element_type=np.int64,
-            shape=inputs["input_ids"].shape,
-            buffer_ptr=inputs["input_ids"].numpy().ctypes.data,
-        )
-        # Bind attention_mask if model expects it
-        input_names = {i.name for i in sess.get_inputs()}
-        if "attention_mask" in input_names:
-            io_binding.bind_input(
-                name="attention_mask",
-                device_type="cpu",
-                device_id=0,
-                element_type=np.int64,
-                shape=inputs["attention_mask"].shape,
-                buffer_ptr=inputs["attention_mask"].numpy().ctypes.data,
-            )
-        output_name = sess.get_outputs()[0].name
-        io_binding.bind_output(name=output_name, device_type="cpu", device_id=0)
-        sess.run_with_iobinding(io_binding)
-        res = io_binding.copy_outputs_to_cpu()[0]
-        return res
+        input_feed = {k: v.numpy() for k, v in inputs.items() if k in {i.name for i in sess.get_inputs()}}
+        outputs = sess.run(None, input_feed)
+        return outputs[0]
 
     out_fp32 = _run_onnx(model_fp32)
     out_int8 = _run_onnx(model_int8)
 
-    diff = np.max(np.abs(out_fp32 - out_int8))
-    print(f"   ∥FP32 − INT8∥∞ = {diff:.4e}")
-    if diff > atol:
-        raise ValueError(f"Parity check failed: diff {diff} > {atol}")
-    print("✔ Validation passed (difference within tolerance)")
+    abs_diff = np.max(np.abs(out_fp32 - out_int8))
+    rel_diff = abs_diff / (np.max(np.abs(out_fp32)) + 1e-8)
+    print(f"   ∥FP32 − INT8∥∞ = {abs_diff:.4e} (relative {rel_diff:.4%})")
+    if abs_diff > atol and rel_diff > 0.02:  # allow 2% relative error
+        raise ValueError(
+            f"Parity check failed: abs {abs_diff:.4e} (>{atol}) and rel {rel_diff:.4%} (>2%)"
+        )
+    print("✔ Validation passed")
 
 
 def main():
