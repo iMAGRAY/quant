@@ -48,7 +48,10 @@ try:
     )
     from onnxruntime import InferenceSession, SessionOptions, get_available_providers
     from onnxruntime.quantization import QuantType, quantize_dynamic
-    from onnxruntime.transformers.optimizer import optimize_model, OptimizationOptions
+    try:
+        from onnxruntime.transformers.optimizer import optimize_model  # type: ignore
+    except ImportError:
+        optimize_model = None  # fallback if module unavailable
 except ImportError as exc:
     print("✖ Required packages missing. Install via `pip install -r requirements.txt`.\n", file=sys.stderr)
     raise
@@ -96,17 +99,17 @@ def _optimize_graph(onnx_path: Path, model_id: str) -> Path:
     num_heads = getattr(cfg, "num_attention_heads", None) or 12
     hidden_size = getattr(cfg, "hidden_size", None) or 768
 
-    # Define optimisation options (enable all safe fusions)
-    opt_options = OptimizationOptions("gpt2")
-    opt_options.enable_transformers_specific_optimizations = True
-    opt_options.enable_gelu_approximation = True
+    if optimize_model is None:
+        print("⚠ onnxruntime.transformers.optimizer unavailable — skipping graph optimisation.")
+        return onnx_path
+
+    # Run high-level optimisation (all safe fusions)
     opt_model = optimize_model(
         onnx_path.as_posix(),
-        model_type="gpt2",  # closest architecture for Qwen3 embedding model
+        model_type="gpt2",
         num_heads=num_heads,
         hidden_size=hidden_size,
         opt_level=99,
-        optimization_options=opt_options,
     )
     opt_model.save_model_to_file(opt_path.as_posix())
     print(f"✔ Optimised model saved to {opt_path}")
