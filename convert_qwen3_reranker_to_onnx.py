@@ -103,13 +103,36 @@ def export_and_quantize(
 
     if dynamic:
         LOGGER.info("⚙️  Динамическое INT8-квантование…")
-        qconfig = QuantizationConfig.for_dynamic()
-        quantizer = ORTQuantizer.from_pretrained(ort_model)
-        quantizer.quantize(
-            save_dir=output_dir,
-            quantization_config=qconfig,
-        )
-        LOGGER.info("✅ Квантованная модель сохранена в %s", output_dir)
+        try:
+            qconfig = QuantizationConfig.for_dynamic()  # type: ignore[attr-defined]
+            quantizer = ORTQuantizer.from_pretrained(ort_model)
+            quantizer.quantize(
+                save_dir=output_dir,
+                quantization_config=qconfig,
+            )
+            LOGGER.info("✅ Квантованная модель сохранена в %s", output_dir)
+        except AttributeError:
+            # Старые версии optimum (<1.18) не имеют метода for_dynamic.
+            LOGGER.warning(
+                "QuantizationConfig.for_dynamic не найден – переключаемся на "
+                "onnxruntime.quantization.quantize_dynamic. Рекомендуется "
+                "обновить optimum до последней версии."
+            )
+
+            from onnxruntime.quantization import QuantType, quantize_dynamic
+
+            onnx_model_path = next(output_dir.glob("*.onnx"))
+            quant_model_path = output_dir / "model.int8.onnx"
+
+            quantize_dynamic(
+                model_input=onnx_model_path.as_posix(),
+                model_output=quant_model_path.as_posix(),
+                weight_type=QuantType.QInt8,
+                per_channel=False,
+                op_types_to_quantize=["MatMul", "Gemm"],
+                reduce_range=True,
+            )
+            LOGGER.info("✅ Квантованная модель сохранена в %s", quant_model_path)
 
     LOGGER.info("🎉 Готово!")
 
