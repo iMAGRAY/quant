@@ -42,11 +42,13 @@ from tqdm.auto import tqdm
 
 try:
     from transformers import AutoModel, AutoTokenizer, set_seed
+    from transformers import AutoConfig
     from optimum.exporters.onnx import (
         main_export as optimum_export,  # high-level CLI entrypoint function
     )
     from onnxruntime import InferenceSession, SessionOptions, get_available_providers
     from onnxruntime.quantization import QuantType, quantize_dynamic
+    from onnxruntime.transformers.optimizer import optimize_model, OptimizationOptions
 except ImportError as exc:
     print("✖ Required packages missing. Install via `pip install -r requirements.txt`.\n", file=sys.stderr)
     raise
@@ -80,6 +82,35 @@ def _export_to_onnx(model_id: str, out_dir: Path, opset: int, device: str) -> Pa
         shutil.move(candidates[0], onnx_path)
     print(f"✔ ONNX model saved to {onnx_path}")
     return onnx_path
+
+
+def _optimize_graph(onnx_path: Path, model_id: str) -> Path:
+    """Apply ORT Transformer graph optimizations and save optimised model."""
+    opt_path = onnx_path.with_name("model.opt.onnx")
+    if opt_path.exists():
+        print(f"✔ Found existing optimised model at {opt_path}, skipping graph optimisation.")
+        return opt_path
+
+    print("➜ Optimising ONNX graph (transformer-specific passes)…")
+    cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    num_heads = getattr(cfg, "num_attention_heads", None) or 12
+    hidden_size = getattr(cfg, "hidden_size", None) or 768
+
+    # Define optimisation options (enable all safe fusions)
+    opt_options = OptimizationOptions("gpt2")
+    opt_options.enable_transformers_specific_optimizations = True
+    opt_options.enable_gelu_approximation = True
+    opt_model = optimize_model(
+        onnx_path.as_posix(),
+        model_type="gpt2",  # closest architecture for Qwen3 embedding model
+        num_heads=num_heads,
+        hidden_size=hidden_size,
+        opt_level=99,
+        optimization_options=opt_options,
+    )
+    opt_model.save_model_to_file(opt_path.as_posix())
+    print(f"✔ Optimised model saved to {opt_path}")
+    return opt_path
 
 
 def _quantize(onnx_path: Path, quant_path: Path) -> Path:
@@ -148,7 +179,11 @@ def main():
 
     out_dir = Path(args.out_dir).expanduser().resolve()
     onnx_fp32_path = _export_to_onnx(args.model, out_dir, args.opset, args.device)
-    onnx_int8_path = _quantize(onnx_fp32_path, onnx_fp32_path.with_name("model.int8.onnx"))
+
+    # Graph-level optimisations prior to quantisation
+    onnx_opt_path = _optimize_graph(onnx_fp32_path, args.model)
+
+    onnx_int8_path = _quantize(onnx_opt_path, onnx_opt_path.with_name("model.int8.onnx"))
 
     if not args.skip_validation:
         _validate(onnx_fp32_path, onnx_int8_path, args.model, args.device)
