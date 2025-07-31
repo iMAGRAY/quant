@@ -190,7 +190,6 @@ def main():
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset version (>=17 recommended)")
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"], help="Device for reference run")
     parser.add_argument("--skip_validation", action="store_true", help="Skip numerical parity check")
-    parser.add_argument("--compress", action="store_true", help="Gzip-compress final ONNX model")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir).expanduser().resolve()
@@ -207,14 +206,6 @@ def main():
 
     if not args.skip_validation:
         _validate(onnx_fp32_path, onnx_final_path, args.model, args.device)
-
-    if args.compress:
-        import gzip, shutil
-        gz_path = onnx_final_path.with_suffix(onnx_final_path.suffix + ".gz")
-        if not gz_path.exists():
-            with open(onnx_final_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=9) as f_out:
-                shutil.copyfileobj(f_in, f_out)
-            print("✔ Compressed to", gz_path)
 
     print("🎉 Done. INT8 ONNX model ready at", onnx_final_path)
 
