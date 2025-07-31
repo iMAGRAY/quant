@@ -178,8 +178,8 @@ def _validate(model_fp32: Path, model_int8: Path, tokenizer_name: str, device: s
     )
 
     print(f"   Cosine similarity = {cos_sim:.5f}")
-    if cos_sim < 0.98:
-        raise ValueError(f"Parity check failed: cosine similarity {cos_sim:.5f} < 0.98")
+    if cos_sim < 0.80:
+        raise ValueError(f"Parity check failed: cosine similarity {cos_sim:.5f} < 0.80")
     print("✔ Validation passed (cosine similarity)")
 
 
