@@ -46,7 +46,12 @@ try:
     from optimum.exporters.onnx import (
         main_export as optimum_export,  # high-level CLI entrypoint function
     )
-    from onnxruntime import InferenceSession, SessionOptions, get_available_providers
+    from onnxruntime import (
+        InferenceSession,
+        SessionOptions,
+        get_available_providers,
+        GraphOptimizationLevel,
+    )
     from onnxruntime.quantization import QuantType, quantize_dynamic
     try:
         from onnxruntime.transformers.optimizer import optimize_model  # type: ignore
@@ -152,13 +157,28 @@ def _validate(model_fp32: Path, model_int8: Path, tokenizer_name: str, device: s
 
     def _run_onnx(path: Path):
         opts = SessionOptions()
-        opts.graph_optimization_level = 99  # ORT OptimizationLevel.ORT_ENABLE_ALL
+        opts.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
         sess = InferenceSession(path.as_posix(), opts, providers=get_available_providers())
         io_binding = sess.io_binding()
-        io_binding.bind_input(name="input_ids", device_type="cpu", device_id=0, element_type=np.int64, shape=inputs["input_ids"].shape, buffer_ptr=inputs["input_ids"].numpy().ctypes.data)
-        # attention_mask may be optional depending on model config
-        if "attention_mask" in sess.get_inputs()[1].name:
-            io_binding.bind_input(name="attention_mask", device_type="cpu", device_id=0, element_type=np.int64, shape=inputs["attention_mask"].shape, buffer_ptr=inputs["attention_mask"].numpy().ctypes.data)
+        io_binding.bind_input(
+            name="input_ids",
+            device_type="cpu",
+            device_id=0,
+            element_type=np.int64,
+            shape=inputs["input_ids"].shape,
+            buffer_ptr=inputs["input_ids"].numpy().ctypes.data,
+        )
+        # Bind attention_mask if model expects it
+        input_names = {i.name for i in sess.get_inputs()}
+        if "attention_mask" in input_names:
+            io_binding.bind_input(
+                name="attention_mask",
+                device_type="cpu",
+                device_id=0,
+                element_type=np.int64,
+                shape=inputs["attention_mask"].shape,
+                buffer_ptr=inputs["attention_mask"].numpy().ctypes.data,
+            )
         output_name = sess.get_outputs()[0].name
         io_binding.bind_output(name=output_name, device_type="cpu", device_id=0)
         sess.run_with_iobinding(io_binding)
