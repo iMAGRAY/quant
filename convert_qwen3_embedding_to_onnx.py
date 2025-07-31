@@ -169,7 +169,7 @@ def _validate(model_fp32: Path, model_int8: Path, tokenizer_name: str, device: s
 
     # Compare cosine similarity of pooled embeddings (robust metric)
     def _mean_pool(x):
-        return x.mean(axis=1, keepdims=False)
+        return x.mean(axis=1, keepdims=False).squeeze(0)
 
     vec_fp32 = _mean_pool(out_fp32)
     vec_int8 = _mean_pool(out_int8)
