@@ -21,7 +21,13 @@ import logging
 import sys
 from pathlib import Path
 
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
+
+try:
+    # Оптимизатор графов от ONNX Runtime (трансформер-специфичные pass-ы)
+    from onnxruntime.transformers.optimizer import optimize_model  # type: ignore
+except Exception:
+    optimize_model = None  # pragma: no cover
 
 try:
     # Опциональная зависимость: optimum + onnxruntime
@@ -35,6 +41,14 @@ except ImportError as err:  # pragma: no cover
         "❌  Библиотека `optimum` не найдена. Установите командой:\n"
         "    pip install --upgrade \"optimum[onnxruntime,export]\""
     ) from err
+
+# onnxruntime INT8 квантайзер
+try:
+    from onnxruntime.quantization import QuantType, quantize_dynamic  # type: ignore
+except ImportError as exc:  # pragma: no cover
+    raise SystemExit(
+        "❌  Требуется onnxruntime>=1.18. Установите: pip install onnxruntime"
+    ) from exc
 
 logging.basicConfig(
     format="[%(levelname)s] %(message)s", level=logging.INFO, stream=sys.stdout
@@ -99,40 +113,52 @@ def export_and_quantize(
 
     ort_model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
-    LOGGER.info("✅ ONNX-модель сохранена в %s", output_dir)
 
-    if dynamic:
-        LOGGER.info("⚙️  Динамическое INT8-квантование…")
+    # ── Поиск пути к model.onnx ────────────────────────────────────────────
+    try:
+        onnx_path = next(output_dir.glob("*.onnx"))
+    except StopIteration as e:  # pragma: no cover
+        raise FileNotFoundError("*.onnx not found in output directory after export") from e
+
+    LOGGER.info("✅ ONNX-модель сохранена в %s", onnx_path)
+
+    # ── Дополнительная оптимизация графа (при наличии пакета) ──────────────
+    if optimize_model is not None:
+        LOGGER.info("🔧 Оптимизация графа ONNX…")
+        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        num_heads = getattr(cfg, "num_attention_heads", 12)
+        hidden_size = getattr(cfg, "hidden_size", 768)
+
         try:
-            qconfig = QuantizationConfig.for_dynamic()  # type: ignore[attr-defined]
-            quantizer = ORTQuantizer.from_pretrained(ort_model)
-            quantizer.quantize(
-                save_dir=output_dir,
-                quantization_config=qconfig,
+            opt_model = optimize_model(
+                onnx_path.as_posix(),
+                model_type="gpt2",  # ближайший тип архитектуры
+                num_heads=num_heads,
+                hidden_size=hidden_size,
+                opt_level=99,
             )
-            LOGGER.info("✅ Квантованная модель сохранена в %s", output_dir)
-        except AttributeError:
-            # Старые версии optimum (<1.18) не имеют метода for_dynamic.
-            LOGGER.warning(
-                "QuantizationConfig.for_dynamic не найден – переключаемся на "
-                "onnxruntime.quantization.quantize_dynamic. Рекомендуется "
-                "обновить optimum до последней версии."
-            )
+            onnx_opt_path = onnx_path.with_name("model.opt.onnx")
+            opt_model.save_model_to_file(onnx_opt_path.as_posix())
+            LOGGER.info("✅ Оптимизированная модель сохранена в %s", onnx_opt_path)
+            onnx_path = onnx_opt_path
+        except Exception as err:  # pragma: no cover
+            LOGGER.warning("Оптимизация не удалась (%s). Продолжаем без неё.", err)
+    else:
+        LOGGER.info("⚠️  onnxruntime.transformers.optimizer недоступен – пропускаем оптимизацию графа")
 
-            from onnxruntime.quantization import QuantType, quantize_dynamic
-
-            onnx_model_path = next(output_dir.glob("*.onnx"))
-            quant_model_path = output_dir / "model.int8.onnx"
-
-            quantize_dynamic(
-                model_input=onnx_model_path.as_posix(),
-                model_output=quant_model_path.as_posix(),
-                weight_type=QuantType.QInt8,
-                per_channel=False,
-                op_types_to_quantize=["MatMul", "Gemm"],
-                reduce_range=True,
-            )
-            LOGGER.info("✅ Квантованная модель сохранена в %s", quant_model_path)
+    # ── INT8 динамическое квантование ─────────────────────────────────────
+    if dynamic:
+        LOGGER.info("⚙️  Динамическое INT8-квантование (onnxruntime)…")
+        quant_model_path = onnx_path.with_name("model.int8.onnx")
+        quantize_dynamic(
+            model_input=onnx_path.as_posix(),
+            model_output=quant_model_path.as_posix(),
+            weight_type=QuantType.QInt8,
+            per_channel=False,  # per-tensor безопаснее для классификатора
+            op_types_to_quantize=["MatMul", "Gemm"],
+            reduce_range=True,
+        )
+        LOGGER.info("✅ Квантованная модель сохранена в %s", quant_model_path)
 
     LOGGER.info("🎉 Готово!")
 
