@@ -95,7 +95,6 @@ def _quantize(onnx_path: Path, quant_path: Path) -> Path:
         weight_type=QuantType.QInt8,
         per_channel=True,
         reduce_range=True,
-        optimize_model=True,
     )
     print(f"✔ Quantised model saved to {quant_path}")
     return quant_path
