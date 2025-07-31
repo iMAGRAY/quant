@@ -93,7 +93,6 @@ def _quantize(onnx_path: Path, quant_path: Path) -> Path:
         model_input=onnx_path.as_posix(),
         model_output=quant_path.as_posix(),
         weight_type=QuantType.QInt8,
-        activation_type=QuantType.QUInt8,
         per_channel=True,
         reduce_range=True,
         optimize_model=True,
