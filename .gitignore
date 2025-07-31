@@ -1,1 +1,2 @@
 onnx/qwen3/model.opt.onnx
+onnx/qwen3_reranker/model.opt.onnx
