@@ -69,10 +69,31 @@ def export_and_quantize(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     LOGGER.info("🚀 Экспортируем %s → ONNX…", model_id)
+
+    # Параметр `use_external_data_format` появился в недавних версиях `optimum`.
+    # Чтобы оставаться совместимыми с более старыми версиями, проверяем
+    # поддерживается ли он рефлексивно. Если нет — вызываем без параметра.
+    import inspect  # локальный импорт, чтобы не засорять глобальное пространство
+
+    _fp_sig = inspect.signature(ORTModelForSequenceClassification.from_pretrained)
+    kwargs: dict[str, object] = {
+        "model_id_or_path": model_id,  # позиционный будет передан как *args
+        "export": True,
+    }
+    if "use_external_data_format" in _fp_sig.parameters:
+        kwargs["use_external_data_format"] = use_external_data_format
+    else:
+        if use_external_data_format:
+            LOGGER.warning(
+                "Версия optimum не поддерживает `use_external_data_format`; "
+                "ONNX будет сохранён в обычном формате. Обновите пакет: "
+                "pip install -U 'optimum[onnxruntime,export]'"
+            )
+
+    # Разворачиваем kwargs аккуратно (без лишних параметров)
     ort_model = ORTModelForSequenceClassification.from_pretrained(
-        model_id,
-        export=True,
-        use_external_data_format=use_external_data_format,
+        kwargs.pop("model_id_or_path"),
+        **kwargs,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
