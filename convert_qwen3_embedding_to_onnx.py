@@ -94,23 +94,27 @@ def _optimize_graph(onnx_path: Path, model_id: str) -> Path:
         print(f"✔ Found existing optimised model at {opt_path}, skipping graph optimisation.")
         return opt_path
 
+    if optimize_model is None:
+        print("⚠ optimize_model unavailable — skipping optimisation.")
+        return onnx_path
+
     print("➜ Optimising ONNX graph (transformer-specific passes)…")
     cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
     num_heads = getattr(cfg, "num_attention_heads", None) or 12
     hidden_size = getattr(cfg, "hidden_size", None) or 768
 
-    if optimize_model is None:
-        print("⚠ onnxruntime.transformers.optimizer unavailable — skipping graph optimisation.")
+    try:
+        opt_model = optimize_model(
+            onnx_path.as_posix(),
+            model_type="gpt2",
+            num_heads=num_heads,
+            hidden_size=hidden_size,
+            opt_level=99,
+        )
+    except Exception as e:
+        print(f"⚠ optimisation failed: {e}. Using original model.")
         return onnx_path
 
-    # Run high-level optimisation (all safe fusions)
-    opt_model = optimize_model(
-        onnx_path.as_posix(),
-        model_type="gpt2",
-        num_heads=num_heads,
-        hidden_size=hidden_size,
-        opt_level=99,
-    )
     opt_model.save_model_to_file(opt_path.as_posix())
     print(f"✔ Optimised model saved to {opt_path}")
     return opt_path
@@ -183,15 +187,19 @@ def main():
     out_dir = Path(args.out_dir).expanduser().resolve()
     onnx_fp32_path = _export_to_onnx(args.model, out_dir, args.opset, args.device)
 
-    # Graph-level optimisations prior to quantisation
-    onnx_opt_path = _optimize_graph(onnx_fp32_path, args.model)
+    # Dynamic-range INT8 quantisation first
+    onnx_int8_path = _quantize(
+        onnx_fp32_path,
+        onnx_fp32_path.with_name("model.int8.onnx"),
+    )
 
-    onnx_int8_path = _quantize(onnx_opt_path, onnx_opt_path.with_name("model.int8.onnx"))
+    # Optional graph optimisation on quantised model
+    onnx_final_path = _optimize_graph(onnx_int8_path, args.model)
 
     if not args.skip_validation:
-        _validate(onnx_fp32_path, onnx_int8_path, args.model, args.device)
+        _validate(onnx_fp32_path, onnx_final_path, args.model, args.device)
 
-    print("🎉 Done. Optimised INT8 ONNX model ready at", onnx_int8_path)
+    print("🎉 Done. INT8 ONNX model ready at", onnx_final_path)
 
 
 if __name__ == "__main__":
